@@ -121,7 +121,43 @@ pub fn in_bootloader() -> bool {
     false
 }
 
-/// Découverte : localise l'interface de configuration Raw HID (usage page 0xFF60, usage 0x61).
+/// Prédicat de sélection pour l'interface de configuration du clavier.
+///
+/// Accepte l'interface si :
+/// a) `usage_page == 0xff60 && usage == 0x61` (canal Raw HID classique)
+/// b) OU si `interface_number == 1`
+/// c) OU si le chemin contient `mi_01` (canal fournisseur Windows)
+///
+/// Si `usage_page` vaut 0 (fréquent sous Windows avec pilote composite générique),
+/// il n'est pas traité comme un rejet bloquant dès lors que l'interface correspond à MI_01.
+pub fn is_config_interface_match(
+    vendor_id: u16,
+    product_id: u16,
+    target_pid: Option<u16>,
+    usage_page: u16,
+    usage: u16,
+    interface_number: i32,
+    path: &str,
+) -> bool {
+    if vendor_id != VENDOR_ID {
+        return false;
+    }
+    if let Some(pid) = target_pid {
+        if product_id != pid {
+            return false;
+        }
+    } else if devices::lookup(product_id).is_none() {
+        return false;
+    }
+
+    let is_raw_hid = usage_page == USAGE_PAGE && usage == USAGE;
+    let is_iface_1 = interface_number == 1;
+    let is_mi_01_path = path.to_ascii_lowercase().contains("mi_01");
+
+    is_raw_hid || is_iface_1 || is_mi_01_path
+}
+
+/// Découverte : localise l'interface de configuration Raw HID (usage page 0xFF60, usage 0x61, ou interface 1 / MI_01).
 pub fn find_config_interface(
     product_id: Option<u16>,
 ) -> Result<hidapi::DeviceInfo, DeviceError> {
@@ -129,11 +165,15 @@ pub fn find_config_interface(
     let mut candidates: Vec<hidapi::DeviceInfo> = api
         .device_list()
         .filter(|d| {
-            d.vendor_id() == VENDOR_ID
-                && d.usage_page() == USAGE_PAGE
-                && d.usage() == USAGE
-                && product_id.map_or(true, |pid| d.product_id() == pid)
-                && (product_id.is_some() || devices::lookup(d.product_id()).is_some())
+            is_config_interface_match(
+                d.vendor_id(),
+                d.product_id(),
+                product_id,
+                d.usage_page(),
+                d.usage(),
+                d.interface_number(),
+                &d.path().to_string_lossy(),
+            )
         })
         .cloned()
         .collect();
@@ -145,12 +185,17 @@ pub fn find_config_interface(
             ));
         }
         return Err(DeviceError::NotFound(format!(
-            "aucune interface Raw HID ({USAGE_PAGE:#06x}:{USAGE:#04x}) détectée pour {VENDOR_ID:#06x}."
+            "aucune interface de configuration Raw HID ({USAGE_PAGE:#06x}:{USAGE:#04x} ou MI_01) détectée pour {VENDOR_ID:#06x}."
         )));
     }
 
-    // Tri stable pour sélectionner de manière déterministe en présence de plusieurs cartes
-    candidates.sort_by_key(|d| (d.product_id(), d.path().to_string_lossy().to_string()));
+    // Tri stable pour sélectionner de manière déterministe en présence de plusieurs cartes :
+    // On priorise les interfaces avec usage_page == 0xFF60 && usage == 0x61, puis MI_01.
+    candidates.sort_by_key(|d| {
+        let is_exact = d.usage_page() == USAGE_PAGE && d.usage() == USAGE;
+        let priority = if is_exact { 0 } else { 1 };
+        (priority, d.product_id(), d.path().to_string_lossy().to_string())
+    });
     Ok(candidates.remove(0))
 }
 
@@ -1589,5 +1634,94 @@ mod tests {
         // Doit ignorer le paquet de push et retourner la réponse de ONE_TOG_TH
         let mm = kb.read_actuation_mm(0, 0).unwrap();
         assert!((mm - 1.00).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_is_config_interface_match_cases() {
+        let mad68_pid = 0x1058;
+
+        // a) Cas standard Raw HID : usage_page 0xFF60, usage 0x61
+        assert!(is_config_interface_match(
+            VENDOR_ID,
+            mad68_pid,
+            None,
+            0xFF60,
+            0x61,
+            0,
+            "\\\\?\\hid#vid_373b&pid_1058&mi_00#...",
+        ));
+
+        // b) Interface 1 sous Windows même si usage_page == 0
+        assert!(is_config_interface_match(
+            VENDOR_ID,
+            mad68_pid,
+            None,
+            0,
+            0,
+            1,
+            "\\\\?\\hid#vid_373b&pid_1058...",
+        ));
+
+        // c) Chemin contenant "mi_01" (insensible à la casse) avec usage_page == 0
+        assert!(is_config_interface_match(
+            VENDOR_ID,
+            mad68_pid,
+            None,
+            0,
+            0,
+            -1,
+            "\\\\?\\hid#vid_373b&pid_1058&mi_01#7&368819d4&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}",
+        ));
+        assert!(is_config_interface_match(
+            VENDOR_ID,
+            mad68_pid,
+            None,
+            0,
+            0,
+            -1,
+            "\\\\?\\HID#VID_373B&PID_1058&MI_01#...",
+        ));
+
+        // Rejet : Mauvais VID
+        assert!(!is_config_interface_match(
+            0x1234,
+            mad68_pid,
+            None,
+            0xFF60,
+            0x61,
+            1,
+            "\\\\?\\hid#vid_1234&pid_1058&mi_01#...",
+        ));
+
+        // Rejet : Interface 0 (ex: clavier standard / consumer control) sans usage_page Raw HID
+        assert!(!is_config_interface_match(
+            VENDOR_ID,
+            mad68_pid,
+            None,
+            0x01,
+            0x06,
+            0,
+            "\\\\?\\hid#vid_373b&pid_1058&mi_00#...",
+        ));
+
+        // Filtrage par PID cible
+        assert!(is_config_interface_match(
+            VENDOR_ID,
+            mad68_pid,
+            Some(mad68_pid),
+            0xFF60,
+            0x61,
+            1,
+            "mi_01",
+        ));
+        assert!(!is_config_interface_match(
+            VENDOR_ID,
+            mad68_pid,
+            Some(0x2024), // bootloader PID
+            0xFF60,
+            0x61,
+            1,
+            "mi_01",
+        ));
     }
 }
