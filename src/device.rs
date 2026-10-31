@@ -1391,11 +1391,20 @@ pub mod mock {
     pub struct MockHidTransport {
         pub written: Arc<Mutex<Vec<Vec<u8>>>>,
         pub responses: Arc<Mutex<VecDeque<Vec<u8>>>>,
+        pub auto_reply: bool,
     }
 
     impl MockHidTransport {
         pub fn new() -> Self {
             Self::default()
+        }
+
+        pub fn with_auto_reply() -> Self {
+            Self {
+                written: Arc::new(Mutex::new(Vec::new())),
+                responses: Arc::new(Mutex::new(VecDeque::new())),
+                auto_reply: true,
+            }
         }
 
         pub fn queue_response(&self, rep: &[u8]) {
@@ -1419,6 +1428,17 @@ pub mod mock {
         fn read_timeout(&mut self, buf: &mut [u8], _timeout_ms: i32) -> Result<usize, DeviceError> {
             let mut q = self.responses.lock().unwrap();
             if let Some(resp) = q.pop_front() {
+                let len = buf.len().min(resp.len());
+                buf[..len].copy_from_slice(&resp[..len]);
+                Ok(len)
+            } else if self.auto_reply {
+                let mut resp = [0u8; 32];
+                let w = self.written.lock().unwrap();
+                if let Some(last) = w.last() {
+                    let slice = if last.len() == 33 { &last[1..] } else { &last[..] };
+                    let len = slice.len().min(resp.len());
+                    resp[..len].copy_from_slice(&slice[..len]);
+                }
                 let len = buf.len().min(resp.len());
                 buf[..len].copy_from_slice(&resp[..len]);
                 Ok(len)

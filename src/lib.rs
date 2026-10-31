@@ -23,12 +23,15 @@ pub mod backup;
 pub mod device;
 pub mod devices;
 pub mod features;
+pub mod hud;
 pub mod keycodes;
 pub mod paths;
 pub mod profile;
 pub mod protocol;
 pub mod restore;
 pub mod settings;
+pub mod switcher;
+pub mod tray;
 pub mod updater;
 pub mod version;
 
