@@ -154,6 +154,16 @@ pub fn find_config_interface(
     Ok(candidates.remove(0))
 }
 
+/// Résumé des métadonnées du périphérique USB.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceInfoSummary {
+    pub vendor_id: u16,
+    pub product_id: u16,
+    pub serial_number: Option<String>,
+    pub manufacturer_string: Option<String>,
+    pub product_string: Option<String>,
+}
+
 /// Gestionnaire d'un clavier magnétique de la famille DuckBread / MAD68.
 pub struct Mad68 {
     pub writes: bool,
@@ -163,6 +173,7 @@ pub struct Mad68 {
     pub allow_unverified: bool,
     transport: Option<Box<dyn HidTransport>>,
     pub spec: BoardSpec,
+    pub info: DeviceInfoSummary,
     protocol_version: Option<u16>,
     populated: Option<Vec<bool>>,
 }
@@ -184,6 +195,7 @@ impl Mad68 {
             allow_unverified,
             transport: None,
             spec: devices::default_board().clone(),
+            info: DeviceInfoSummary::default(),
             protocol_version: None,
             populated: None,
         }
@@ -199,6 +211,13 @@ impl Mad68 {
 
         let pid = iface.product_id();
         self.spec = devices::describe(pid);
+        self.info = DeviceInfoSummary {
+            vendor_id: iface.vendor_id(),
+            product_id: pid,
+            serial_number: iface.serial_number().map(|s| s.to_string()),
+            manufacturer_string: iface.manufacturer_string().map(|s| s.to_string()),
+            product_string: iface.product_string().map(|s| s.to_string()),
+        };
         if devices::is_unlocked(pid) {
             self.allow_unverified = true;
         }
@@ -220,7 +239,14 @@ impl Mad68 {
         spec: BoardSpec,
     ) -> Result<(), DeviceError> {
         let pid = spec.product_id;
-        self.spec = spec;
+        self.spec = spec.clone();
+        self.info = DeviceInfoSummary {
+            vendor_id: VENDOR_ID,
+            product_id: pid,
+            serial_number: Some("TEST-SERIAL-12345".to_string()),
+            manufacturer_string: Some("Madlions".to_string()),
+            product_string: Some(spec.name.to_string()),
+        };
         if devices::is_unlocked(pid) {
             self.allow_unverified = true;
         }

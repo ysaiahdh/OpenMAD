@@ -19,6 +19,7 @@
 //! | [`device`]     | `mad68/device.py`             |
 //! | [`profile`]    | `mad68/profile.py`            |
 
+pub mod backup;
 pub mod device;
 pub mod devices;
 pub mod features;
@@ -26,7 +27,9 @@ pub mod keycodes;
 pub mod paths;
 pub mod profile;
 pub mod protocol;
+pub mod restore;
 pub mod settings;
+pub mod updater;
 pub mod version;
 
 // Ré-exports alignés sur `mad68/__init__.py`
@@ -41,3 +44,4 @@ pub use protocol::{
     KeyboardValue, Reply, Vendor, VOLATILE_KEYBOARD_VALUES,
 };
 pub use settings::AppSettings;
+pub use updater::{check_for_update, download_asset, ReleaseAsset, ReleaseCheckResult, UpdaterError};
