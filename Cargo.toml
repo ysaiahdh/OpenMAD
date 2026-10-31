@@ -1,0 +1,44 @@
+[package]
+name = "openmad-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Utilitaire Rust natif Windows pour claviers magnétiques MAD68"
+
+[dependencies]
+# Communication USB HID native Windows (SetupAPI / hid.dll)
+hidapi = "2.6"
+
+# Sérialisation des profils et de settings.json
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Interface CLI pour regrouper backup, restore, tray et hud
+clap = { version = "4.5", features = ["derive"] }
+
+# Gestion des erreurs
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Chemins système Windows (%APPDATA%, %LOCALAPPDATA%)
+dirs = "5.0"
+
+# Icône dans la zone de notification Windows (System Tray)
+tray-icon = "0.19"
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }
+
+# Client HTTP léger pour updater.py
+ureq = { version = "2.10", features = ["json"] }
+
+# API Win32 officielle pour switcher.py (détection du jeu actif) et hud.py (overlay)
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_Graphics_Gdi",
+] }
+
+# Intégration de assets/icon.ico dans l'exécutable Windows
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
