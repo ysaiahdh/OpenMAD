@@ -53,8 +53,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # configparser, not sed: the same parser mad68.spec and the app use,
-          # so this cannot disagree with them about what the version is.
           python3 - >> "$GITHUB_OUTPUT" <<'PY'
           import configparser
           c = configparser.ConfigParser()
@@ -81,18 +79,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          python-version: '3.13'
-          cache: pip
+          targets: x86_64-pc-windows-msvc
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
 
-      - name: Build the executable
-        run: pyinstaller --noconfirm packaging/mad68.spec
+      - name: Build the release binary
+        run: cargo build --release
 
       - name: Install Inno Setup
         run: |
@@ -108,25 +104,17 @@ jobs:
 
       - name: Check the build is what the updater will accept
         # The in-app updater only downloads an asset matching
-        # ^[\w.-]+-Setup-[\d.]+\.exe$ (updater._INSTALLER_RE) and refuses
-        # anything else. A release the updater silently will not install is
-        # worse than a failed build, so the name is checked here rather than
-        # discovered by users.
+        # ^[\w.-]+-Setup-[\d.]+\.exe$ (updater.rs is_installer_name) and refuses
+        # anything else.
         run: |
           $name    = "${{ needs.check.outputs.name }}"
           $version = "${{ needs.check.outputs.version }}"
-          $exe     = "dist\$name\$name.exe"
+          $exe     = "target\release\openmad-rs.exe"
           $setup   = "packaging\Output\$name-Setup-$version.exe"
 
-          if (-not (Test-Path $exe))   { throw "PyInstaller produced no $exe" }
+          if (-not (Test-Path $exe))   { throw "Cargo produced no $exe" }
           if (-not (Test-Path $setup)) { throw "Inno produced no $setup" }
-          # A one-folder build with no payload beside the exe would install and
-          # then fail to start, which is the failure this packaging change was
-          # made to end. Cheaper to catch here than in a release.
-          $dll = Get-ChildItem "dist\$name" -Recurse -Filter "python*.dll" |
-                 Select-Object -First 1
-          if (-not $dll) { throw "no python*.dll shipped beside $exe" }
-          Write-Output "payload ok: $($dll.FullName)"
+
           if ((Split-Path $setup -Leaf) -notmatch '^[\w.-]+-Setup-[\d.]+\.exe$') {
             throw "installer name is not one the updater will accept: $setup"
           }
@@ -135,24 +123,20 @@ jobs:
           Write-Output "$setup  ($mb MB)"
           "SETUP=$setup" >> $env:GITHUB_ENV
 
+          # Prepare standalone executable artifact
+          Copy-Item $exe "target\release\$name.exe"
+          "STANDALONE_EXE=target\release\$name.exe" >> $env:GITHUB_ENV
+
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: ${{ env.SETUP }}
 
       - name: Tag and publish the release
-        # gh creates the tag as part of the release, pointed at this commit.
-        #
-        # That tag is a lightweight ref and carries no signature, so it will
-        # not show GitHub's "Verified" badge the way a locally signed
-        # `git tag -a` does. The attestation above is the stronger guarantee
-        # and covers the thing that actually matters -- the binary -- but if
-        # you want the badge as well, see the note in the repo README on
-        # switching this workflow to trigger on tag pushes instead.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ needs.check.outputs.tag }}" "$env:SETUP" `
+          gh release create "${{ needs.check.outputs.tag }}" "$env:SETUP" "$env:STANDALONE_EXE" `
             --target "${{ github.sha }}" `
             --title "${{ needs.check.outputs.name }} ${{ needs.check.outputs.version }}" `
             --generate-notes

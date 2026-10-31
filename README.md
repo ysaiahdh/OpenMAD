@@ -3,14 +3,14 @@
 [![Logo](assets/logo.png)](https://openmad.accw.dev)
 
 [![Static Badge](https://img.shields.io/badge/License-GNU%20GPLv3-green)](https://creativecommons.org/licenses/by-sa/4.0/?ref=chooser-v1)
-[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.75+-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Platforms](https://img.shields.io/badge/Platform-Windows-lightgrey)]()
 
-A local driver for the **MAD68 HE** magnetic-switch keyboard, replacing the
+A native, lightweight Windows driver and utility for **MAD68 HE** magnetic-switch keyboards, replacing the
 web-only configurator at `hub.fgg.com.cn`.
 
 It does everything the stock tool does, plus the things a web page can't: named
-profiles stored as files, and automatic profile switching based on which
+profiles stored as files, zero-latency telemetry overlay HUD, and automatic profile switching based on which
 application is in the foreground.
 
 ## Disclaimer
@@ -107,8 +107,8 @@ deliberate action, either from Change Key Setting or the tray.
 
 **Reads are free.** The live telemetry the gauge uses is read-only.
 
-**Everything is reversible.** `tools/backup.py` snapshots the full onboard state
-to JSON and `tools/restore.py` writes it back. Take a backup before your first
+**Everything is reversible.** `openmad-rs backup` snapshots the full onboard state
+to JSON and `openmad-rs restore` writes it back. Take a backup before your first
 write.
 
 **The dangerous commands are gated.** Calibration, factory reset, EEPROM reset
@@ -124,33 +124,46 @@ reset cannot touch them.
 
 ---
 
-## Building from source
+## Building from source (Rust native)
 
-Requires Python 3.11+ and Windows.
+Requires Rust 1.75+ with the MSVC toolchain (`x86_64-pc-windows-msvc`) on Windows.
 
 ```bash
-git clone <repo> && cd madlions_driver
-python -m venv .venv && .venv\Scripts\activate
-pip install -r requirements.txt
-python tools/tray.py          # tray app (this is the product)
-python tools/hud.py           # configurator only, no tray
+git clone <repo> && cd OpenMAD
+cargo build --release
 ```
 
-### Building a release
+The resulting standalone executable `target\release\openmad-rs.exe` has zero Python runtime dependencies and embeds all required branding and icon resources.
+
+### Running & CLI subcommands
+
+When launched without arguments (or double-clicked from File Explorer), OpenMAD starts silently in the Windows system tray.
+
+You can also run specific tools directly from PowerShell or CMD:
 
 ```bash
-pip install pyinstaller
-pyinstaller packaging/mad68.spec        # -> dist/OpenMAD.exe
+# Launch the tray application with auto-switching (default mode)
+target\release\openmad-rs.exe tray
+target\release\openmad-rs.exe tray --dry-run        # log decisions without hardware writes
+
+# Launch the live telemetry HUD / web dashboard (default: http://127.0.0.1:8787/)
+target\release\openmad-rs.exe hud
+target\release\openmad-rs.exe hud --overlay         # includes transparent on-top Win32 HUD
+
+# Hardware backup / restore
+target\release\openmad-rs.exe backup --out backup.json
+target\release\openmad-rs.exe backup --verify backup.json
+target\release\openmad-rs.exe restore backup.json              # simulation (dry-run)
+target\release\openmad-rs.exe restore backup.json --apply      # write changes to keyboard
 ```
 
-`dist/OpenMAD.exe` is standalone: no Python, no dependencies, no install. Enough
-to hand someone a single file.
+### Building the installer
 
-For the installer, install [Inno Setup](https://jrsoftware.org/isinfo.php) and
-then:
+Install [Inno Setup](https://jrsoftware.org/isinfo.php) and run:
 
 ```bash
-iscc packaging/mad68.iss                # -> packaging/Output/OpenMAD-Setup-1.0.0.exe
+cargo build --release
+iscc packaging/mad68.iss     # -> packaging/Output/OpenMAD-Setup-<version>.exe
 ```
 
 The installer adds Start-menu and optional desktop shortcuts, and offers to
@@ -159,30 +172,25 @@ start the app at sign-in.
 ### Releasing
 
 The version and repository live in one file, `version.ini` at the repository
-root. The app reads it at runtime, the PyInstaller spec names the executable
-from it, and the installer script reads it with the Inno preprocessor, so there
+root. The app reads it at runtime and build time, and the installer script reads it with the Inno preprocessor, so there
 is nothing to keep in sync.
 
 ```ini
 [app]
 name = OpenMAD
-version = 1.0.0
+version = 1.1.4
 repo = Acciaw/OpenMAD
 ```
 
 To cut a release: bump `version`, rebuild both artifacts, then tag the commit
-with the same number prefixed by `v` and publish a GitHub release with the two
+with the same number prefixed by `v` and publish a GitHub release with the
 binaries attached.
 
 ```bash
-git tag v1.0.0 && git push origin v1.0.0
-gh release create v1.0.0 dist/OpenMAD.exe   packaging/Output/OpenMAD-Setup-1.0.0.exe --title "OpenMAD 1.0.0"
+git tag v1.1.4 && git push origin v1.1.4
 ```
 
-The update check reads `/repos/<repo>/releases/latest` and compares the tag
-numerically against the running version. The release must be published rather
-than a draft: the latest endpoint skips drafts and prereleases, so a draft looks
-like no update at all.
+The GitHub Actions workflow automatically builds the release binary, builds the installer, attests provenance, and publishes the release.
 
 ---
 
@@ -190,36 +198,11 @@ like no update at all.
 
 | | |
 |---|---|
-| `src/mad68/` | the driver: protocol, transport, profiles, switcher, web UI |
-| `tools/` | what ships: `tray.py`, `hud.py`, and the `backup.py` / `restore.py` safety net |
-| `dev/` | development only, gitignored — test harness and hardware probes |
-| `packaging/` | PyInstaller spec and Inno Setup script |
-| `assets/` | logo and icon (see `assets/README.md`) |
-| `research/` | protocol notes and the deobfuscation tool (tracked); the
-deobfuscated vendor bundle itself (gitignored) |
+| `src/` | Native Rust core: protocol, device HID, profiles, switcher, HUD, tray, updater, CLI |
+| `packaging/` | Inno Setup script (`mad68.iss`) |
+| `assets/` | logo, icon and embedded HUD dashboard |
+| `research/` | protocol notes and the deobfuscation tool |
 | `profiles/` | profile JSON |
-
-`research/notes/protocol.md` and `research/deobfuscate.js` are original work and
-stay tracked. The deobfuscated copy of the vendor's own JavaScript that
-`protocol.md` was written from — `research/beautified/`, `research/clear/`,
-`research/webapp/`, `research/strings/` — is gitignored: it is a reproduction
-of someone else's copyrighted source, not needed to build or run anything, and
-regenerable by running `research/deobfuscate.js` against a fresh download of
-the vendor's bundle if you need to re-derive something.
-
-### Development checks
-
-```bash
-python dev/smoke.py            # every entry point, with the keyboard connected
-python dev/smoke.py --offline  # the subset that needs no hardware
-python dev/check_pages.py      # parses the web UI and renders every tab
-```
-
-`check_pages.py` is worth knowing about: it executes the page against a DOM stub
-and renders every tab, sub-tab, editor and lighting effect. Parsing alone cannot
-catch a `ReferenceError`, and one shipped that way — a missing constant threw
-while building the Advanced Key list, which meant no event handlers were ever
-attached and every button in that section was dead.
 
 ---
 
@@ -233,7 +216,7 @@ Confirmed on hardware, reading and writing:
 | MAD60 HE | `0x373B:0x1053` | 5 × 14, 61 keys |
 
 The `DuckBread` controller backs 25 boards in the same family — see
-[`src/mad68/devices.py`](src/mad68/devices.py) for the full list, taken from
+[`src/devices.rs`](src/devices.rs) for the full list, taken from
 the vendor's own registry. They share the packet layouts, vendor sub-commands
 and flash semantics; only the matrix geometry differs, and the driver reads
 that from the board it is talking to rather than assuming one.
@@ -241,54 +224,8 @@ that from the board it is talking to rather than assuming one.
 A board that is not on the confirmed list opens **read-only**. It can be
 inspected, diagnosed and reported on safely, but nothing can write to it until
 its firmware reports a protocol version this driver was built against *and*
-someone has actually run it on that model. Sending a board report from Other
-Settings is what moves a board onto the list.
+someone has actually run it on that model.
 
 Take a backup first.
 
 Not affiliated with, endorsed by, or supported by the manufacturer.
-
-This project's own code is original work, and the protocol notes describe
-facts learned by reverse engineering (byte offsets, enum values, command IDs)
-rather than reproducing anyone's source. The vendor's own JavaScript, even
-deobfuscated, is their copyrighted work and is deliberately not distributed
-here; see `research/` in the repository layout above for exactly what is and
-is not tracked.
-
----
-
-## Firmware updates
-
-This driver does not flash firmware, on purpose. Flashing is the one operation
-that can brick the board with no recovery path this project controls, and the
-official configurator already does it. The Firmware button in the sidebar links
-straight to `hub.fgg.com.cn` rather than attempting it locally.
-
-The more interesting risk is the other direction: what happens here if you
-flash *new* firmware through the official tool. Every packet layout in this
-driver, every byte offset, every enum, was reverse engineered from one specific
-firmware build and confirmed against it on real hardware. A firmware update
-could change any of that. It is not hypothetical — the vendor's own app does
-the same kind of version check internally, gating whether advanced keys are
-even offered based on a firmware version number in its device table. Wire
-formats do change between firmware builds.
-
-So the driver checks. It reads the keyboard's own reported protocol version on
-every connect and compares it against the version this build was verified
-against (`KNOWN_PROTOCOL_VERSION` in `src/mad68/protocol.py`). If they match,
-nothing is shown — this is the common case and should stay invisible. If they
-do not, a banner appears across every tab saying so, naming the live version
-and recommending a backup and the official configurator until it is confirmed
-safe.
-
-This is deliberately a warning, not a hard block. A version bump might change
-nothing this driver touches, and refusing to work on principle would be worse
-than the risk it is guarding against. But it means a firmware update is never
-silently unsafe: either everything still lines up, or you are told plainly that
-it might not, before anything gets written.
-
-If you do hit a mismatch and want it supported, that is a real reverse
-engineering task, not a settings change: recheck the packet layouts in
-`research/notes/protocol.md` against the new firmware, confirm each change on
-hardware the way the rest of this project's findings were confirmed, and update
-`KNOWN_PROTOCOL_VERSION` only once that is done.
